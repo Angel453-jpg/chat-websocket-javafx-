@@ -1,0 +1,9 @@
+package org.angel.curso.javafx.chatapp.appjavafxchat;
+
+import javafx.application.Application;
+
+public class Launcher {
+    public static void main(String[] args) {
+        Application.launch(HelloApplication.class, args);
+    }
+}
