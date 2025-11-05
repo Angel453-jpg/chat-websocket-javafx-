@@ -16,14 +16,25 @@ import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
 import javafx.stage.Stage;
 import org.angel.curso.javafx.chatapp.appjavafxchat.models.Messages;
+import org.springframework.messaging.converter.CompositeMessageConverter;
+import org.springframework.messaging.converter.MappingJackson2MessageConverter;
+import org.springframework.messaging.converter.MessageConverter;
+import org.springframework.messaging.converter.StringMessageConverter;
+import org.springframework.messaging.simp.stomp.*;
+import org.springframework.web.socket.client.standard.StandardWebSocketClient;
+import org.springframework.web.socket.messaging.WebSocketStompClient;
+import org.springframework.web.socket.sockjs.client.SockJsClient;
+import org.springframework.web.socket.sockjs.client.Transport;
+import org.springframework.web.socket.sockjs.client.WebSocketTransport;
 
-import java.io.IOException;
+import java.lang.reflect.Type;
 import java.text.SimpleDateFormat;
-import java.util.Date;
+import java.util.List;
 
 public class ChatApplication extends Application {
 
     private Messages message = new Messages();
+    private String clientId;
 
     @Override
     public void start(Stage stage) {
@@ -50,60 +61,121 @@ public class ChatApplication extends Application {
         HBox footer = new HBox(10, messageField, sendButton, disconnectButton);
         footer.setVisible(false);
 
+
+        List<Transport> transports = List.of(new WebSocketTransport(new StandardWebSocketClient()));
+        WebSocketStompClient stompClient = new WebSocketStompClient(new SockJsClient(transports));
+
+        List<MessageConverter> converters = List.of(new StringMessageConverter(), new MappingJackson2MessageConverter());
+        stompClient.setMessageConverter(new CompositeMessageConverter(converters));
+
         conButton.setOnAction(e -> {
             if (!usernameField.getText().isBlank()) {
 
-                this.message.setUsername(usernameField.getText());
-                System.out.println(usernameField.getText());
+                stompClient.connectAsync("http://localhost:8080/chat-websocket", new StompSessionHandlerAdapter() {
 
-                chat.setVisible(true);
-                scroll.setVisible(true);
-                footer.setVisible(true);
+                    @Override
+                    public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
 
-                usernameField.setVisible(false);
-                conButton.setVisible(false);
+                        clientId = session.getSessionId();
+
+                        message.setUsername(usernameField.getText());
+                        System.out.println(usernameField.getText());
+
+                        chat.setVisible(true);
+                        scroll.setVisible(true);
+                        footer.setVisible(true);
+
+                        usernameField.setVisible(false);
+                        conButton.setVisible(false);
+
+                        System.out.println("Conectado: " + session.isConnected() + " Id: " + session.getSessionId());
+
+                        session.subscribe("/chat/message", new StompFrameHandler() {
+
+                            @Override
+                            public Type getPayloadType(StompHeaders headers) {
+                                return Messages.class;
+                            }
+
+                            @Override
+                            public void handleFrame(StompHeaders headers, Object payload) {
+
+                                Messages messages = (Messages) payload;
+
+                                SimpleDateFormat format = new SimpleDateFormat("hh:mm:a");
+                                String time = format.format(messages.getDate());
+                                Text username = new Text(messages.getUsername());
+                                username.setFill(Color.web(messages.getColor()));
+                                username.setFont(Font.font("Arial", FontWeight.BOLD, 12));
+
+                                TextFlow textFlow = null;
+
+                                if (messages.getType().equals("MESSAGE")) {
+
+                                    textFlow = new TextFlow(new Text(time + " @"));
+                                    textFlow.getChildren().add(username);
+                                    textFlow.getChildren().add(new Text(" dice: \n".concat(message.getText())));
+
+                                } else if (messages.getType().equals("NEW_USER")) {
+
+                                    textFlow = new TextFlow(new Text(time + ": " + messages.getText()));
+                                    textFlow.getChildren().add(new Text("conectado! @"));
+                                    textFlow.getChildren().add(username);
+
+                                }
+
+                                chat.getChildren().add(textFlow);
+
+                            }
+                        });
+
+                        message.setType("NEW_USER");
+                        session.send("app/message", message);
+
+                        sendButton.setOnAction(e -> {
+                            if (!messageField.getText().isBlank()) {
+
+                                message.setType("MESSAGE");
+                                message.setText(messageField.getText());
+                                session.send("app/message", message);
+
+
+                                messageField.setText("");
+
+
+                            } else {
+                                Alert alert = new Alert(Alert.AlertType.ERROR, "Por favor ingrese un mensaje...");
+                                alert.show();
+                            }
+                        });
+
+                        disconnectButton.setOnAction(e -> {
+
+                            if (session.isConnected()) {
+                                session.disconnect();
+                            }
+
+                            chat.setVisible(false);
+                            chat.getChildren().clear();
+                            scroll.setVisible(false);
+                            footer.setVisible(false);
+
+                            usernameField.setVisible(true);
+                            conButton.setVisible(true);
+
+                            message = new Messages();
+                            messageField.setText("");
+
+                        });
+
+
+                    }
+
+                });
+
 
             } else {
                 Alert alert = new Alert(Alert.AlertType.ERROR, "Por favor ingrese el nombre de usuario!");
-                alert.show();
-            }
-        });
-
-        disconnectButton.setOnAction(e -> {
-            chat.setVisible(false);
-            chat.getChildren().clear();
-            scroll.setVisible(false);
-            footer.setVisible(false);
-
-            usernameField.setVisible(true);
-            conButton.setVisible(true);
-
-            this.message = new Messages();
-            messageField.setText("");
-
-        });
-
-        sendButton.setOnAction(e -> {
-            if (!messageField.getText().isBlank()) {
-
-                this.message.setType("MESSAGE");
-                this.message.setText(messageField.getText());
-
-                SimpleDateFormat format = new SimpleDateFormat("hh:mm:a");
-                String time = format.format(new Date().getTime());
-                Text username = new Text(message.getUsername());
-                username.setFill(Color.RED);
-                username.setFont(Font.font("Arial", FontWeight.BOLD, 12));
-
-                TextFlow textFlow = new TextFlow(new Text(time + " @"));
-                textFlow.getChildren().add(username);
-                textFlow.getChildren().add(new Text(" dice: \n".concat(message.getText())));
-
-                chat.getChildren().add(textFlow);
-                messageField.setText("");
-
-            } else {
-                Alert alert = new Alert(Alert.AlertType.ERROR, "Por favor ingrese un mensaje...");
                 alert.show();
             }
         });
@@ -115,5 +187,6 @@ public class ChatApplication extends Application {
         stage.setTitle("Chat Web Socket con Spring Boot!");
         stage.setScene(scene);
         stage.show();
+
     }
 }
